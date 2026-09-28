@@ -1,116 +1,909 @@
-local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
-local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
-local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+local Ember = loadstring(game:HttpGet('https://rbx.lol/ember.lua'))()
 
-local Window = Fluent:CreateWindow({
-    Title = "Sultan's Hub",
-    SubTitle = "Death in the box (DITB SCRIPT)",
-    TabWidth = 160,
-    Size = UDim2.fromOffset(580, 460),
-    Acrylic = true,
-    Theme = "Dark",
-    MinimizeKey = Enum.KeyCode.LeftControl
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Lighting = game:GetService("Lighting")
+local CoreGui = game:GetService("CoreGui")
+local Remote = ReplicatedStorage:WaitForChild("Remote")
+
+local lp = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+Ember.Configure({
+    Storage = {
+        Enabled = true,
+        AutoLoad = false,
+        AutoSave = false
+    }
+})
+
+local win = Ember.new({
+    Title = "Death in the Box",
+    Subtitle = "@z3bd in discord"
 })
 
 local Tabs = {
-    ESP = Window:AddTab({ Title = "ESP", Icon = "eye" }),
-    Minigames = Window:AddTab({ Title = "Minigames", Icon = "gamepad" }),
-    Misc = Window:AddTab({ Title = "Misc", Icon = "layers" }),
-    Credits = Window:AddTab({ Title = "Credits", Icon = "info" }),
-    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
+    ESP      = win:Section("ESP", "eye"),
+    Auto     = win:Section("Auto", "zap"),
+    Misc     = win:Section("Misc", "layers"),
+    Settings = win:Section("Settings", "settings"),
+    Credits  = win:Section("Credits", "info")
 }
 
-local Options = Fluent.Options
-local LocalPlayer = game.Players.LocalPlayer
-local Players = game:GetService("Players")
-local Camera = workspace.CurrentCamera
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService = game:GetService("RunService")
-local Lighting = game:GetService("Lighting")
+local Settings = {
+    drawEspEnabled = false,
+    iconEspEnabled = false,
+    NormalColor = Color3.fromRGB(80, 220, 120),
+    ChainedColor = Color3.fromRGB(255, 60, 60),
+    DangerColor = Color3.fromRGB(255, 200, 0),
+    AutoQTE = false
+}
 
-local DrawingEntities = {}
-local FullbrightConnection
+local mg = {
+    autoDuel      = false, duelMin = 0.20, duelMax = 0.35,
+    autoElim      = false, elimMin = 0.20, elimMax = 0.35,
+    autoPotato    = false,
+    autoFire      = false, fireMin = 0.20, fireMax = 0.35,
+    autoSaw       = false, sawMin = 0.20, sawMax = 0.35,
+    autoRoulette  = false, rouletteMin = 0.20, rouletteMax = 0.35,
+    autoSplitSteal = false, splitChoice = "Split",
+    autoRisk      = false, riskChoice = "No",
+    autoSave      = false,
+    autoBombButton = false, bombButtonMin = 0.20, bombButtonMax = 0.35,
+    autoRevolver  = false, revolverMin = 0.20, revolverMax = 0.35,
+    autoStab      = false, stabChoice = "Random", stabMin = 0.20, stabMax = 0.35,
+    ignoreFriends = true,
+    ignoreDangerous = true,
+}
 
-Tabs.ESP:AddToggle("IconESP", { Title = "Show Card Icons (Buggy)", Default = false })
-Tabs.ESP:AddToggle("TextESP", { Title = "Show Card Text (Works Fine)", Default = false })
-Tabs.ESP:AddColorpicker("NormalColor", { Title = "Normal Text Color", Default = Color3.fromRGB(255, 255, 0) })
-Tabs.ESP:AddColorpicker("ChainedColor", { Title = "Chained Text Color", Default = Color3.fromRGB(255, 0, 0) })
+local function randDelay(minV, maxV)
+    local base = minV + math.random() * (maxV - minV)
+    local jitter = (math.random() + math.random() + math.random() - 1.5) * 0.08
+    return math.max(minV, base + jitter)
+end
 
-Tabs.Minigames:AddToggle("AutoQTE", { Title = "Auto Dodge", Default = false })
+local function getChar() return lp.Character end
 
-Tabs.Minigames:AddSection("Duel")
-Tabs.Minigames:AddToggle("DuelAssist", { Title = "Duel Auto-Shoot", Default = false })
-Tabs.Minigames:AddSlider("DuelDelayMin", { Title = "Min Shoot Delay", Default = 0.5, Min = 0, Max = 2, Rounding = 2 })
-Tabs.Minigames:AddSlider("DuelDelayMax", { Title = "Max Shoot Delay", Default = 1.0, Min = 0, Max = 2, Rounding = 2 })
+local function getAlivePlayers(excludeSelf)
+    local list = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if excludeSelf and p == lp then continue end
+        local char = workspace:FindFirstChild(p.Name)
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health > 0 then
+            table.insert(list, p)
+        end
+    end
+    return list
+end
 
-Tabs.Minigames:AddSection("Elimination Target")
-Tabs.Minigames:AddToggle("ElimAssist", { Title = "Auto Shoot Target", Default = false })
-Tabs.Minigames:AddSlider("ElimDelayMin", { Title = "Min Target Delay", Default = 0.2, Min = 0, Max = 2, Rounding = 2 })
-Tabs.Minigames:AddSlider("ElimDelayMax", { Title = "Max Target Delay", Default = 1.0, Min = 0, Max = 2, Rounding = 2 })
+local function hasCard(playerOrChar, cardName)
+    local char = playerOrChar
+    if typeof(playerOrChar) == "Instance" and playerOrChar:IsA("Player") then
+        char = workspace:FindFirstChild(playerOrChar.Name)
+    end
+    if not char then return false end
+    local cards = char:FindFirstChild("Cards")
+    return cards and cards:FindFirstChild(cardName) ~= nil
+end
 
-Tabs.Minigames:AddSection("Hot Potato")
-Tabs.Minigames:AddToggle("PotatoAuto", { Title = "Auto Throw Potato", Default = false })
-Tabs.Minigames:AddToggle("PotatoSafe", { Title = "Safe Throw (Vengeance Check)", Default = true })
-Tabs.Minigames:AddToggle("PotatoFriend", { Title = "Friend Check", Default = true })
+local function pickSafestTarget()
+    local candidates = {}
+    for _, p in ipairs(getAlivePlayers(true)) do
+        if mg.ignoreFriends and lp:IsFriendsWith(p.UserId) then continue end
+        if mg.ignoreDangerous and (hasCard(p, "Vengeance") or hasCard(p, "Jester")) then continue end
+        table.insert(candidates, p)
+    end
+    
+    if #candidates == 0 and mg.ignoreDangerous then
+        for _, p in ipairs(getAlivePlayers(true)) do
+            if mg.ignoreFriends and lp:IsFriendsWith(p.UserId) then continue end
+            if hasCard(p, "Vengeance") then continue end
+            table.insert(candidates, p)
+        end
+    end
+    
+    if #candidates == 0 and mg.ignoreDangerous then
+        for _, p in ipairs(getAlivePlayers(true)) do
+            if hasCard(p, "Vengeance") then continue end
+            table.insert(candidates, p)
+        end
+    end
+    
+    if #candidates == 0 then
+        candidates = getAlivePlayers(true)
+    end
+    
+    if #candidates == 0 then return nil end
+    return candidates[math.random(#candidates)]
+end
 
-Tabs.Minigames:AddSection("Saw")
-Tabs.Minigames:AddToggle("SawAuto", { Title = "Auto Saw", Default = false })
-Tabs.Minigames:AddSlider("SawDelayMin", { Title = "Min Saw Delay", Default = 0.1, Min = 0.1, Max = 2, Rounding = 2 })
-Tabs.Minigames:AddSlider("SawDelayMax", { Title = "Max Saw Delay", Default = 0.7, Min = 0.1, Max = 2, Rounding = 2 })
+-- [ ESP LOGIC (Restored Icon ESP + Drawing ESP) ]
 
-Tabs.Minigames:AddSection("Fire")
-Tabs.Minigames:AddToggle("FireAuto", { Title = "Auto Put Out Fire", Default = false })
-Tabs.Minigames:AddSlider("FireDelayMin", { Title = "Min Fire Delay", Default = 0.1, Min = 0, Max = 1, Rounding = 2 })
-Tabs.Minigames:AddSlider("FireDelayMax", { Title = "Max Fire Delay", Default = 0.7, Min = 0, Max = 1, Rounding = 2 })
+local drawingESP = {}  
+local iconESPGuis = {} 
 
-Tabs.Minigames:AddSection("Bomb")
-Tabs.Minigames:AddButton({
-    Title = "Defuse Bomb",
-    Description = "safely cuts only the correct wires",
-    Callback = function()
-        local db = workspace:FindFirstChild("DisarmBomb")
-        if db and db:FindFirstChild("Wires") then
-            for _, wire in ipairs(db.Wires:GetChildren()) do
-                local badVal = wire:FindFirstChild("bad")
-                if badVal and badVal.Value == false then
-                    ReplicatedStorage.Remote.CutWire:FireServer(wire.Name)
-                    task.wait(0.25)
+local function getESPDrawings(name)
+    if drawingESP[name] then return drawingESP[name] end
+    local outline = Drawing.new("Circle")
+    outline.Filled = true; outline.NumSides = 12; outline.Radius = 5
+    outline.Color = Color3.new(0, 0, 0); outline.Visible = false
+
+    local dot = Drawing.new("Circle")
+    dot.Filled = true; dot.NumSides = 12; dot.Radius = 3.5
+    dot.Visible = false
+
+    local text = Drawing.new("Text")
+    text.Size = 14; text.Outline = true; text.Center = true
+    text.Font = 2; text.Visible = false
+
+    local warnText = Drawing.new("Text")
+    warnText.Size = 14; warnText.Outline = true; warnText.Center = true
+    warnText.Font = 2; warnText.Visible = false
+
+    drawingESP[name] = { outline = outline, dot = dot, text = text, warnText = warnText }
+    return drawingESP[name]
+end
+
+local function getIconESP(name)
+    if iconESPGuis[name] then return iconESPGuis[name] end
+    
+    local rsVision = ReplicatedStorage:FindFirstChild("VisionCards")
+    if not rsVision then return nil end
+    
+    local clone = rsVision:Clone()
+    local targetParent = (gethui and gethui()) or CoreGui
+    clone.Parent = targetParent
+    clone.Name = "ESP_" .. name
+    
+    iconESPGuis[name] = clone
+    return clone
+end
+
+local function clearESP(name)
+    if drawingESP[name] then 
+        drawingESP[name].outline:Remove()
+        drawingESP[name].dot:Remove()
+        drawingESP[name].text:Remove()
+        drawingESP[name].warnText:Remove()
+        drawingESP[name] = nil
+    end
+    if iconESPGuis[name] then
+        iconESPGuis[name]:Destroy()
+        iconESPGuis[name] = nil
+    end
+end
+
+local function clearAllESP()
+    for name in pairs(drawingESP) do clearESP(name) end
+end
+
+-- [ MINIGAME STATE ]
+
+local manualOverride = {}
+local lastFired = {}
+
+local function wasManuallyOverridden(key)
+    return manualOverride[key] and (tick() - manualOverride[key]) < 5
+end
+
+local function canFire(key, cooldown)
+    local now = tick()
+    if wasManuallyOverridden(key) then return false end
+    
+    if not lastFired[key] or (now - lastFired[key]) >= cooldown then
+        lastFired[key] = now
+        return true
+    end
+    return false
+end
+
+local OldNamecall
+OldNamecall = hookmetamethod(game, "__namecall", function(self, ...)
+    local method = getnamecallmethod()
+    if not checkcaller() and method == "FireServer" and typeof(self) == "Instance" and self.ClassName == "RemoteEvent" then
+        local name = self.Name
+        local now = tick()
+        if name == "PickPlayerRevolver" then manualOverride["duel"] = now; manualOverride["roulette"] = now; manualOverride["revolver"] = now
+        elseif name == "PickPlayer" or name == "PickPlayerTarget" then manualOverride["elim"] = now
+        elseif name == "ThrowBombToPlayer" or name == "ThrowBomb" then manualOverride["potato"] = now
+        elseif name == "PutOutFire" then manualOverride["fire"] = now; manualOverride["putOutFire"] = now
+        elseif name == "SawEvent" then manualOverride["saw"] = now
+        elseif name == "QuickTimeReact" then manualOverride["qte"] = now
+        elseif name == "RealPickPlayerRevolver" then manualOverride["revolver"] = now
+        elseif name == "SplitOrSteal" then manualOverride["splitsteal"] = now
+        elseif name == "PromptRisk" then manualOverride["revolverRisk"] = now
+        elseif name == "SavePlayer" then manualOverride["savePlayer"] = now
+        elseif name == "PassBombButton" or name == "PressBombButton" then manualOverride["passBombButton"] = now; manualOverride["pressBombButton"] = now
+        elseif name == "ChoseDirection" then manualOverride["stab"] = now
+        end
+    end
+    return OldNamecall(self, ...)
+end)
+
+-- [ MINIGAME LOOPS ]
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        if not mg.autoDuel then continue end
+        local duel = workspace:FindFirstChild("Duel")
+        if not duel or not duel.Active.Value then continue end
+        local me = duel.Player1.Value == lp or duel.Player2.Value == lp
+        if not me then continue end
+        local target = (duel.Player1.Value == lp) and duel.Player2.Value or duel.Player1.Value
+        if not target then continue end
+        if not canFire("duel", 3) then continue end
+        task.wait(randDelay(mg.duelMin, mg.duelMax))
+        if wasManuallyOverridden("duel") then continue end
+        if mg.autoDuel and duel.Active.Value then
+            pcall(function() Remote.PickPlayerRevolver:FireServer(target) end)
+        end
+    end
+end)
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        if not mg.autoElim then continue end
+        local et = workspace:FindFirstChild("ElimTarget") or workspace:FindFirstChild("Eliminate") or workspace:FindFirstChild("EliminatePlayer")
+        if not et or not et.Active.Value then continue end
+        if et:FindFirstChild("Player") and et.Player.Value ~= lp then continue end
+        if not canFire("elim", 2) then continue end
+        task.wait(randDelay(mg.elimMin, mg.elimMax))
+        if wasManuallyOverridden("elim") then continue end
+        if mg.autoElim and et.Active.Value then
+            local target
+            
+            if et:FindFirstChild("TargetPlayer") and et.TargetPlayer.Value then
+                target = et.TargetPlayer.Value
+            else
+                target = pickSafestTarget()
+            end
+            
+            if target then
+                pcall(function() Remote.PickPlayer:FireServer(target) end)
+                pcall(function() Remote.PickPlayerTarget:FireServer(target) end)
+            end
+        end
+    end
+end)
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        if not mg.autoPotato then continue end
+        local hp = workspace:FindFirstChild("HotPotato")
+        if not hp then continue end
+        local holder = hp:FindFirstChild("CurrentHolder")
+        local canThrow = hp:FindFirstChild("CanBeThrown")
+        if not holder or holder.Value ~= lp then continue end
+        if canThrow and not canThrow.Value then continue end
+        if not canFire("potato", 0.5) then continue end
+
+        local target = pickSafestTarget()
+        if target then
+            pcall(function()
+                if Remote:FindFirstChild("ThrowBombToPlayer") then
+                    Remote.ThrowBombToPlayer:FireServer(target)
+                end
+                if Remote:FindFirstChild("ThrowBomb") then
+                    Remote.ThrowBomb:FireServer(target)
+                end
+            end)
+        end
+    end
+end)
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        if not mg.autoFire then continue end
+        local fb = workspace:FindFirstChild("FireBreath")
+        if not fb then continue end
+        if fb:FindFirstChild("PlayerChosen") and fb.PlayerChosen.Value ~= lp then continue end
+        if not canFire("fire", 0.8) then continue end
+        task.wait(randDelay(mg.fireMin, mg.fireMax))
+        if wasManuallyOverridden("fire") then continue end
+        if mg.autoFire and fb.PlayerChosen.Value == lp then
+            pcall(function() Remote.PutOutFire:FireServer() end)
+        end
+    end
+end)
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        if not mg.autoSaw then continue end
+        local saw = workspace:FindFirstChild("Saw")
+        if not saw or not saw.isActive.Value then continue end
+        if saw.Player1.Value ~= lp and saw.Player2.Value ~= lp then continue end
+        if lp:FindFirstChild("ACCooldown") then continue end
+        
+        task.wait(randDelay(mg.sawMin, mg.sawMax))
+        if wasManuallyOverridden("saw") then continue end
+        
+        saw = workspace:FindFirstChild("Saw")
+        if mg.autoSaw and saw and saw.isActive.Value and not lp:FindFirstChild("ACCooldown") then
+            pcall(function() Remote.SawEvent:FireServer(false) end)
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.03)
+        local qt = workspace:FindFirstChild("QuickTime")
+        if not qt then continue end
+        if qt.PlayerChosen.Value ~= lp then continue end
+        if qt.TimeRemaining.Value <= 0 then continue end
+        if not Settings.AutoQTE then continue end
+        if not canFire("qte", 0.5) then continue end
+        pcall(function() Remote.QuickTimeReact:FireServer() end)
+    end
+end)
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        if not mg.autoRoulette then continue end
+        local rou = workspace:FindFirstChild("Roulette")
+        if not rou then continue end
+        if rou.CurrentPlayer.Value ~= lp then continue end
+        if rou.TimeRemaining.Value <= 0 then continue end
+        if not canFire("roulette", 4) then continue end
+        task.wait(randDelay(mg.rouletteMin, mg.rouletteMax))
+        if wasManuallyOverridden("roulette") then continue end
+        if mg.autoRoulette and rou.CurrentPlayer.Value == lp and rou.TimeRemaining.Value > 0 then
+            local target = pickSafestTarget()
+            if target then
+                pcall(function() Remote.PickPlayerRevolver:FireServer(target) end)
+            end
+        end
+    end
+end)
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        if not mg.autoRevolver then continue end
+        local rev = workspace:FindFirstChild("Revolver") or workspace:FindFirstChild("RevolverRoulette") or workspace:FindFirstChild("RevolverSecret")
+        if not rev then continue end
+        
+        local chosenVal = rev:FindFirstChild("PlayerChosen") or rev:FindFirstChild("CurrentHolder")
+        if not chosenVal or chosenVal.Value ~= lp then continue end
+        
+        local timeRemaining = rev:FindFirstChild("TimeRemaining")
+        if timeRemaining and timeRemaining.Value <= 0 then continue end
+        
+        if not canFire("revolver", 1) then continue end
+        
+        task.wait(randDelay(mg.revolverMin, mg.revolverMax))
+        if wasManuallyOverridden("revolver") then continue end
+        
+        if mg.autoRevolver and chosenVal.Value == lp then
+            local target = pickSafestTarget()
+            if target then
+                pcall(function() Remote.RealPickPlayerRevolver:FireServer(target) end)
+                pcall(function() Remote.PickPlayerRevolver:FireServer(target) end)
+            end
+        end
+    end
+end)
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        if not mg.autoSplitSteal then continue end
+        local sos = workspace:FindFirstChild("SplitOrSteal")
+        if not sos or not sos.Active.Value then continue end
+        if sos.Player1.Value ~= lp and sos.Player2.Value ~= lp then continue end
+        if not canFire("splitsteal", 3) then continue end
+        task.wait(randDelay(1.0, 2.5))
+        if wasManuallyOverridden("splitsteal") then continue end
+        if mg.autoSplitSteal and sos.Active.Value then
+            pcall(function() Remote.SplitOrSteal:FireServer(mg.splitChoice) end)
+        end
+    end
+end)
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        if not mg.autoRisk then continue end
+        local rr = workspace:FindFirstChild("RevolverRisk")
+        if not rr then continue end
+        if rr.PlayerChosen.Value ~= lp then continue end
+        if rr.TimeRemaining.Value <= 0 then continue end
+        if not canFire("revolverRisk", 3) then continue end
+        task.wait(randDelay(0.8, 1.8))
+        if wasManuallyOverridden("revolverRisk") then continue end
+        if mg.autoRisk and rr.PlayerChosen.Value == lp and rr.TimeRemaining.Value > 0 then
+            local choice = mg.riskChoice
+            if choice == "Random" then
+                choice = math.random() > 0.5 and "Yes" or "No"
+            end
+            pcall(function() Remote.PromptRisk:FireServer(choice) end)
+        end
+    end
+end)
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        if not mg.autoSave then continue end
+        local sp = workspace:FindFirstChild("SavePlayer")
+        if not sp or not sp.isActive.Value then continue end
+        if sp.CurrentPlayer.Value ~= lp then continue end
+        if not canFire("savePlayer", 2) then continue end
+        task.wait(randDelay(0.8, 2.0))
+        if wasManuallyOverridden("savePlayer") then continue end
+        
+        if mg.autoSave and sp.CurrentPlayer.Value == lp and sp.isActive.Value then
+            local candidates = {}
+            local safePlayers = sp:FindFirstChild("SafePlayers")
+            for _, p in ipairs(getAlivePlayers(true)) do
+                if lp:IsFriendsWith(p.UserId) and not (safePlayers and safePlayers:FindFirstChild(p.Name)) then
+                    table.insert(candidates, p)
+                end
+            end
+            if #candidates == 0 then
+                for _, p in ipairs(getAlivePlayers(true)) do
+                    if not (safePlayers and safePlayers:FindFirstChild(p.Name)) then
+                        table.insert(candidates, p)
+                    end
+                end
+            end
+            
+            if #candidates > 0 then
+                local target = candidates[math.random(#candidates)]
+                pcall(function() Remote.SavePlayer:FireServer(target) end)
+            end
+        end
+    end
+end)
+
+
+
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        if not mg.autoBombButton then continue end
+        local bb = workspace:FindFirstChild("BombButton")
+        if not bb then continue end
+        if bb:FindFirstChild("Player") and bb.Player.Value ~= lp then continue end
+        
+        task.wait(randDelay(mg.bombButtonMin, mg.bombButtonMax))
+        if wasManuallyOverridden("passBombButton") or wasManuallyOverridden("pressBombButton") then continue end
+        
+        if mg.autoBombButton and bb.Player.Value == lp then
+            if bb:FindFirstChild("canSend") and bb.canSend.Value then
+                if canFire("passBombButton", 1) then
+                    pcall(function() Remote.PassBombButton:FireServer() end)
+                end
+            else
+                if canFire("pressBombButton", 0.3) then
+                    pcall(function() Remote.PressBombButton:FireServer() end)
                 end
             end
         end
     end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.05)
+        if not mg.autoStab then continue end
+        local sp = workspace:FindFirstChild("StabPlayer")
+        if not sp then continue end
+        if sp:FindFirstChild("CurrentPlayer") and sp.CurrentPlayer.Value ~= lp then continue end
+        if sp:FindFirstChild("Direction") and sp.Direction.Value ~= "" then continue end
+        if not canFire("stab", 2) then continue end
+        
+        task.wait(randDelay(mg.stabMin, mg.stabMax))
+        if wasManuallyOverridden("stab") then continue end
+        
+        if mg.autoStab and sp.CurrentPlayer.Value == lp and sp.Direction.Value == "" then
+            local choice = mg.stabChoice
+            if choice == "Random" then
+                choice = math.random(2) == 1 and "Left" or "Right"
+            end
+            
+            pcall(function() Remote.ChoseDirection:FireServer(string.lower(choice)) end)
+        end
+    end
+end)
+
+-- [ RENDER LOOP (ESP) ]
+
+local FullbrightConn = nil
+
+RunService.Heartbeat:Connect(function()
+    local drawEspEnabled = Settings.drawEspEnabled
+    local iconEspEnabled = Settings.iconEspEnabled
+
+    if not drawEspEnabled and not iconEspEnabled then
+        clearAllESP()
+        return
+    end
+    
+    local normalCol = Settings.NormalColor
+    local chainCol  = Settings.ChainedColor
+    local dangerCol = Settings.DangerColor
+
+    local seenPlayers = {}
+
+    for _, char in ipairs(workspace:GetChildren()) do
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+        local plr = Players:GetPlayerFromCharacter(char)
+        if not plr or plr == lp then continue end
+
+        local name = char.Name
+        seenPlayers[name] = true
+
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then continue end
+        if drawEspEnabled then
+            local d = getESPDrawings(name)
+            local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position + Vector3.new(0, 3, 0))
+            if onScreen then
+                local isChained = hasCard(char, "Chained")
+                local hasVeng = hasCard(char, "Vengeance")
+                local hasJest = hasCard(char, "Jester")
+                
+                local dotColor = (hasVeng or hasJest) and dangerCol or (isChained and chainCol or normalCol)
+
+                d.outline.Position = Vector2.new(pos.X, pos.Y)
+                d.outline.Visible = true
+
+                d.dot.Color = dotColor
+                d.dot.Position = Vector2.new(pos.X, pos.Y)
+                d.dot.Visible = true
+
+                local cards = char:FindFirstChild("Cards")
+                local cardList = {}
+                if cards then
+                    for _, c in ipairs(cards:GetChildren()) do table.insert(cardList, c.Name) end
+                end
+                local cardStr = #cardList > 0 and table.concat(cardList, " | ") or "No Cards"
+                d.text.Text = name .. "\n" .. cardStr
+                d.text.Color = dotColor
+                d.text.Position = Vector2.new(pos.X, pos.Y + 8)
+                d.text.Visible = true
+                if hasVeng or hasJest then
+                    local txt = "[ WARNING: "
+                    if hasVeng and hasJest then txt = txt .. "VENGEANCE & JESTER"
+                    elseif hasVeng then txt = txt .. "VENGEANCE"
+                    elseif hasJest then txt = txt .. "JESTER" end
+                    txt = txt .. " ]"
+                    
+                    d.warnText.Text = txt
+                    d.warnText.Color = Color3.fromRGB(255, 40, 40)
+                    d.warnText.Position = Vector2.new(pos.X, pos.Y - 22)
+                    d.warnText.Visible = true
+                else
+                    d.warnText.Visible = false
+                end
+            else
+                d.outline.Visible = false
+                d.dot.Visible = false
+                d.text.Visible = false
+                d.warnText.Visible = false
+            end
+        else
+            if drawingESP[name] then
+                drawingESP[name].outline.Visible = false
+                drawingESP[name].dot.Visible = false
+                drawingESP[name].text.Visible = false
+                drawingESP[name].warnText.Visible = false
+            end
+        end
+        if iconEspEnabled then
+            local gui = getIconESP(name)
+            if gui then
+                gui.Enabled = true
+                gui.Adornee = hrp
+                local cardsFolder = char:FindFirstChild("Cards")
+                local cardsFrame = gui:FindFirstChild("MainFrame") and gui.MainFrame:FindFirstChild("Cards")
+                local holder = gui:FindFirstChild("MainFrame") and gui.MainFrame:FindFirstChild("Holder")
+                if cardsFolder and cardsFrame and holder then
+                    local currentCards = {}
+                    for _, c in ipairs(cardsFolder:GetChildren()) do currentCards[c.Name] = true end
+                    
+                    for _, c in ipairs(cardsFrame:GetChildren()) do
+                        if not c:IsA("UIListLayout") and not currentCards[c.Name] then
+                            c:Destroy()
+                        end
+                    end
+                    for cName in pairs(currentCards) do
+                        if not cardsFrame:FindFirstChild(cName) then
+                            local template = holder:FindFirstChild(cName)
+                            if template then
+                                local clone = template:Clone()
+                                clone.Name = cName
+                                clone.Parent = cardsFrame
+                                clone.Visible = true
+                            end
+                        end
+                    end
+                end
+            end
+        else
+            if iconESPGuis[name] then iconESPGuis[name].Enabled = false end
+        end
+    end
+    for name in pairs(drawingESP) do
+        if not seenPlayers[name] then
+            clearESP(name)
+        end
+    end
+end)
+
+-- [ EMBER UI - ESP TAB ]
+
+Tabs.ESP:Toggle({
+    Text = "Show Drawing API ESP", Tooltip = "Show Drawing API ESP",
+    Save = "drawEspEnabled",
+    Callback = function(v) Settings.drawEspEnabled = v end
 })
 
-Tabs.Misc:AddToggle("Fullbright", {
-    Title = "Fullbright", 
-    Default = false,
-    Callback = function(Value)
-        if Value then
-            FullbrightConnection = RunService.RenderStepped:Connect(function()
-                Lighting.Brightness = 2
-                Lighting.ClockTime = 14
-                Lighting.FogEnd = 100000
-                Lighting.GlobalShadows = false
+Tabs.ESP:Toggle({
+    Text = "Show Card Icons ESP", Tooltip = "Show Card Icons ESP",
+    Save = "iconEspEnabled",
+    Callback = function(v) Settings.iconEspEnabled = v end
+})
+
+-- [ EMBER UI - AUTO TAB ]
+
+Tabs.Auto:Title("Targeting Configuration")
+
+Tabs.Auto:Toggle({
+    Text = "Ignore Friends (Auto Target)", Tooltip = "Prevents auto-target from choosing your Roblox friends", Save = "ignoreFriends",
+    Callback = function(v) mg.ignoreFriends = v end
+})
+
+Tabs.Auto:Toggle({
+    Text = "Ignore Dangerous (Auto Target)", Tooltip = "Prevents auto-target from choosing players with Vengeance or Jester cards", Save = "ignoreDangerous",
+    Callback = function(v) mg.ignoreDangerous = v end
+})
+
+Tabs.Auto:Title("General Combat")
+
+Tabs.Auto:Toggle({
+    Text = "Auto Shoot (Elimination)", Tooltip = "Auto Shoot (Elimination)", Save = "autoElim",
+    Callback = function(v) mg.autoElim = v end
+})
+Tabs.Auto:Slider({
+    Text = "Elim Min Delay", Tooltip = "Minimum delay before voting", Default = 0.25, Min = 0.20, Max = 0.60, Step = 0.01, Save = "elimMin",
+    Callback = function(v) mg.elimMin = v end
+})
+Tabs.Auto:Slider({
+    Text = "Elim Max Delay", Tooltip = "Maximum delay before voting", Default = 0.40, Min = 0.20, Max = 0.60, Step = 0.01, Save = "elimMax",
+    Callback = function(v) mg.elimMax = v end
+})
+
+Tabs.Auto:Title("Minigame: Revolver")
+
+Tabs.Auto:Toggle({
+    Text = "Auto Shoot (Revolver)", Tooltip = "Automatically shoots the safest target when you have the revolver", Save = "autoRevolver",
+    Callback = function(v) mg.autoRevolver = v end
+})
+Tabs.Auto:Slider({
+    Text = "Revolver Min Delay", Tooltip = "Minimum delay before shooting with the revolver", Default = 0.25, Min = 0.20, Max = 0.60, Step = 0.01, Save = "revolverMin",
+    Callback = function(v) mg.revolverMin = v end
+})
+Tabs.Auto:Slider({
+    Text = "Revolver Max Delay", Tooltip = "Maximum delay before shooting with the revolver", Default = 0.40, Min = 0.20, Max = 0.60, Step = 0.01, Save = "revolverMax",
+    Callback = function(v) mg.revolverMax = v end
+})
+
+Tabs.Auto:Title("Minigame: Stab")
+
+Tabs.Auto:Toggle({
+    Text = "Auto Stab", Tooltip = "Automatically stabs someone when you get the knife", Save = "autoStab",
+    Callback = function(v) mg.autoStab = v end
+})
+Tabs.Auto:Dropdown({
+    Text = "Stab: Choice", Tooltip = "Stab: Choice",
+    Options = {"Left", "Right", "Random"},
+    Default = "Random",
+    Save = "stabChoice",
+    Callback = function(v) mg.stabChoice = v end
+})
+Tabs.Auto:Slider({
+    Text = "Stab Min Delay", Tooltip = "Minimum delay before stabbing", Default = 0.25, Min = 0.20, Max = 0.60, Step = 0.01, Save = "stabMin",
+    Callback = function(v) mg.stabMin = v end
+})
+Tabs.Auto:Slider({
+    Text = "Stab Max Delay", Tooltip = "Maximum delay before stabbing", Default = 0.40, Min = 0.20, Max = 0.60, Step = 0.01, Save = "stabMax",
+    Callback = function(v) mg.stabMax = v end
+})
+
+Tabs.Auto:Title("Defense & Survival")
+
+Tabs.Auto:Toggle({
+    Text = "Auto Dodge Knife Toss (QTE)", Tooltip = "Auto Dodge Knife Toss (QTE)", Save = "AutoQTE",
+    Callback = function(v) Settings.AutoQTE = v end
+})
+
+Tabs.Auto:Toggle({
+    Text = "Auto Save Player (Life Saver)", Tooltip = "Auto Save Player (Life Saver)", Save = "autoSave",
+    Callback = function(v) mg.autoSave = v end
+})
+
+Tabs.Auto:Title("Minigame: Roulette")
+
+Tabs.Auto:Toggle({
+    Text = "Auto Shoot Safest Target (Roulette)", Tooltip = "Auto Shoot Safest Target (Roulette)", Save = "autoRoulette",
+    Callback = function(v) mg.autoRoulette = v end
+})
+Tabs.Auto:Slider({
+    Text = "Roulette Min Delay", Tooltip = "Roulette Min Delay", Default = 0.25, Min = 0.20, Max = 0.60, Step = 0.01, Save = "rouletteMin",
+    Callback = function(v) mg.rouletteMin = v end
+})
+Tabs.Auto:Slider({
+    Text = "Roulette Max Delay", Tooltip = "Roulette Max Delay", Default = 0.40, Min = 0.20, Max = 0.60, Step = 0.01, Save = "rouletteMax",
+    Callback = function(v) mg.rouletteMax = v end
+})
+
+Tabs.Auto:Title("Minigame: Duel")
+
+Tabs.Auto:Toggle({
+    Text = "Auto Shoot (Duel)", Tooltip = "Auto Shoot (Duel)", Save = "autoDuel",
+    Callback = function(v) mg.autoDuel = v end
+})
+Tabs.Auto:Slider({
+    Text = "Duel Min Delay", Tooltip = "Minimum delay before shooting in a duel", Default = 0.25, Min = 0.20, Max = 0.60, Step = 0.01, Save = "duelMin",
+    Callback = function(v) mg.duelMin = v end
+})
+Tabs.Auto:Slider({
+    Text = "Duel Max Delay", Tooltip = "Maximum delay before shooting in a duel", Default = 0.40, Min = 0.20, Max = 0.60, Step = 0.01, Save = "duelMax",
+    Callback = function(v) mg.duelMax = v end
+})
+
+Tabs.Auto:Title("Minigame: Saw")
+
+Tabs.Auto:Toggle({
+    Text = "Auto Saw", Tooltip = "Auto Saw", Save = "autoSaw",
+    Callback = function(v) mg.autoSaw = v end
+})
+Tabs.Auto:Slider({
+    Text = "Saw Min Delay", Tooltip = "Saw Min Delay", Default = 0.25, Min = 0.20, Max = 0.60, Step = 0.01, Save = "sawMin",
+    Callback = function(v) mg.sawMin = v end
+})
+Tabs.Auto:Slider({
+    Text = "Saw Max Delay", Tooltip = "Saw Max Delay", Default = 0.40, Min = 0.20, Max = 0.60, Step = 0.01, Save = "sawMax",
+    Callback = function(v) mg.sawMax = v end
+})
+
+Tabs.Auto:Title("Minigame: Split or Steal")
+
+Tabs.Auto:Toggle({
+    Text = "Auto Split or Steal", Tooltip = "Automatically chooses your preferred option", Save = "autoSplitSteal",
+    Callback = function(v) mg.autoSplitSteal = v end
+})
+Tabs.Auto:Dropdown({
+    Text = "Split or Steal: Choice", Tooltip = "Split or Steal: Choice",
+    Options = {"Split", "Steal"},
+    Default = "Split",
+    Save = "splitChoice",
+    Callback = function(v) mg.splitChoice = v end
+})
+
+Tabs.Auto:Title("Minigame: Card Risk")
+
+Tabs.Auto:Toggle({
+    Text = "Auto Choose (Card Risk)", Tooltip = "Auto Choose (Card Risk)", Save = "autoRisk",
+    Callback = function(v) mg.autoRisk = v end
+})
+Tabs.Auto:Dropdown({
+    Text = "Risk: Choice", Tooltip = "Risk: Choice",
+    Options = {"Yes", "No", "Random"},
+    Default = "No",
+    Save = "riskChoice",
+    Callback = function(v) mg.riskChoice = v end
+})
+
+Tabs.Auto:Title("Minigame: Hot Potato")
+
+Tabs.Auto:Toggle({
+    Text = "Auto Throw Bomb (Potato)", Tooltip = "Auto Throw Bomb (Potato)", Save = "autoPotato",
+    Callback = function(v) mg.autoPotato = v end
+})
+
+Tabs.Auto:Title("Minigame: Fire Extinguisher")
+
+Tabs.Auto:Toggle({
+    Text = "Auto Put Out Fire", Tooltip = "Auto Put Out Fire", Save = "autoFire",
+    Callback = function(v) mg.autoFire = v end
+})
+Tabs.Auto:Slider({
+    Text = "Extinguish Min Delay", Tooltip = "Extinguish Min Delay", Default = 0.25, Min = 0.20, Max = 0.60, Step = 0.01, Save = "fireMin",
+    Callback = function(v) mg.fireMin = v end
+})
+Tabs.Auto:Slider({
+    Text = "Extinguish Max Delay", Tooltip = "Extinguish Max Delay", Default = 0.40, Min = 0.20, Max = 0.60, Step = 0.01, Save = "fireMax",
+    Callback = function(v) mg.fireMax = v end
+})
+
+Tabs.Auto:Title("Minigame: Bomb Button")
+
+Tabs.Auto:Toggle({
+    Text = "Auto Bomb Button", Tooltip = "Automatically passes or presses the bomb button", Save = "autoBombButton",
+    Callback = function(v) mg.autoBombButton = v end
+})
+Tabs.Auto:Slider({
+    Text = "Bomb Button Min Delay", Tooltip = "Minimum delay before interacting with the bomb button", Default = 0.25, Min = 0.20, Max = 0.60, Step = 0.01, Save = "bombButtonMin",
+    Callback = function(v) mg.bombButtonMin = v end
+})
+Tabs.Auto:Slider({
+    Text = "Bomb Button Max Delay", Tooltip = "Maximum delay before interacting with the bomb button", Default = 0.40, Min = 0.20, Max = 0.60, Step = 0.01, Save = "bombButtonMax",
+    Callback = function(v) mg.bombButtonMax = v end
+})
+
+Tabs.Auto:Title("Bomb Defusal")
+
+Tabs.Auto:Button({
+    Text = "Cut ONE Safe Wire", Tooltip = "Finds one uncut safe wire and cuts it",
+    Callback = function()
+        local db = workspace:FindFirstChild("DisarmBomb")
+        if not db or not db:FindFirstChild("Wires") then
+            win:Notify({ Title = "No active bomb found.", Icon = "alert-circle" })
+            return
+        end
+        local cut = false
+        for _, wire in ipairs(db.Wires:GetChildren()) do
+            local badVal = wire:FindFirstChild("bad")
+            if badVal and badVal.Value == false then
+                pcall(function() Remote.CutWire:FireServer(wire.Name) end)
+                win:Notify({ Title = "Cut " .. string.upper(wire.Name) .. " wire!", Icon = "check" })
+                cut = true
+                break
+            end
+        end
+        if not cut then
+            win:Notify({ Title = "No uncut safe wires found.", Icon = "alert-circle" })
+        end
+    end
+})
+
+Tabs.Auto:Button({
+    Text = "Cut ALL Safe Wires", Tooltip = "Automatically cuts every safe wire on the bomb",
+    Callback = function()
+        local db = workspace:FindFirstChild("DisarmBomb")
+        if not db or not db:FindFirstChild("Wires") then
+            win:Notify({ Title = "No active bomb found.", Icon = "alert-circle" })
+            return
+        end
+        task.spawn(function()
+            local cutCount = 0
+            for _, wire in ipairs(db.Wires:GetChildren()) do
+                local badVal = wire:FindFirstChild("bad")
+                if badVal and badVal.Value == false then
+                    pcall(function() Remote.CutWire:FireServer(wire.Name) end)
+                    cutCount = cutCount + 1
+                    task.wait(0.2)
+                end
+            end
+            win:Notify({ Title = "Cut " .. cutCount .. " safe wires!", Icon = "check" })
+        end)
+    end
+})
+
+-- [ MISC TAB ]
+
+Tabs.Misc:Toggle({
+    Text = "Fullbright", Tooltip = "Fullbright",
+    Callback = function(v)
+        if v then
+            FullbrightConn = RunService.RenderStepped:Connect(function()
+                Lighting.Brightness = 2; Lighting.ClockTime = 14
+                Lighting.FogEnd = 100000; Lighting.GlobalShadows = false
                 Lighting.Ambient = Color3.fromRGB(178, 178, 178)
                 Lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
-                
                 local cc = Lighting:FindFirstChildOfClass("ColorCorrectionEffect")
                 if cc then cc.Enabled = false end
                 local blur = Lighting:FindFirstChildOfClass("BlurEffect")
                 if blur then blur.Enabled = false end
             end)
         else
-            if FullbrightConnection then
-                FullbrightConnection:Disconnect()
-                FullbrightConnection = nil
-            end
-            Lighting.Brightness = 1
-            Lighting.ClockTime = 12
-            Lighting.FogEnd = 1000
-            Lighting.GlobalShadows = true
+            if FullbrightConn then FullbrightConn:Disconnect(); FullbrightConn = nil end
+            Lighting.Brightness = 1; Lighting.ClockTime = 12
+            Lighting.FogEnd = 1000; Lighting.GlobalShadows = true
             Lighting.Ambient = Color3.fromRGB(0, 0, 0)
             Lighting.OutdoorAmbient = Color3.fromRGB(127, 127, 127)
-
             local cc = Lighting:FindFirstChildOfClass("ColorCorrectionEffect")
             if cc then cc.Enabled = true end
             local blur = Lighting:FindFirstChildOfClass("BlurEffect")
@@ -119,195 +912,127 @@ Tabs.Misc:AddToggle("Fullbright", {
     end
 })
 
-Tabs.Credits:AddParagraph({
-    Title = "Developer Information",
-    Content = "My Own DITB Script ( vmagistic )"
-})
-
-Tabs.Credits:AddButton({
-    Title = "Copy Discord Username",
-    Description = "Copies my discord username",
+Tabs.Misc:Button({
+    Text = "Check My Cards", Tooltip = "Check My Cards",
     Callback = function()
-        setclipboard("vmagistic") 
-        Fluent:Notify({ Title = "Success", Content = "Discord link copied to clipboard!", Duration = 3 })
+        local cards = lp.Character and lp.Character:FindFirstChild("Cards")
+        if not cards then 
+            win:Notify({ Title = "No cards yet", Icon = "info" })
+            return 
+        end
+        local list = {}
+        for _, c in ipairs(cards:GetChildren()) do table.insert(list, c.Name) end
+        local content = #list > 0 and table.concat(list, ", ") or "None"
+        win:Notify({ Title = content, Icon = "info" })
     end
 })
 
-task.spawn(function()
-    while true do
-        if Options.ElimAssist and Options.ElimAssist.Value then
-            local et = workspace:FindFirstChild("ElimTarget")
-            if et and et:FindFirstChild("Target") and et.Target.Value ~= "" then
-                local targetPlayer = Players:FindFirstChild(et.Target.Value)
-                if targetPlayer then
-                    local delay = math.random(Options.ElimDelayMin.Value * 100, Options.ElimDelayMax.Value * 100) / 100
-                    task.wait(delay)
-                    if Options.ElimAssist.Value and et:FindFirstChild("Target") and et.Target.Value == targetPlayer.Name then
-                        ReplicatedStorage.Remote.PickPlayerRevolver:FireServer(targetPlayer)
-                    end
-                end
+Tabs.Misc:Button({
+    Text = "Copy Discord (@z3bd)", Tooltip = "Copy Discord (@z3bd)",
+    Callback = function()
+        pcall(function() setclipboard("z3bd") end)
+        win:Notify({ Title = "Copied @z3bd", Icon = "clipboard" })
+    end
+})
+
+-- [ SETTINGS TAB ]
+
+win:ThemeEditor()
+
+Tabs.Settings:Title("Configuration")
+
+Tabs.Settings:Toggle({
+    Text = "Ignore Friends (Auto Target)", Tooltip = "Ignore Friends (Auto Target)", Default = true, Save = "ignoreFriends",
+    Callback = function(v) mg.ignoreFriends = v end
+})
+
+Tabs.Settings:Toggle({
+    Text = "Ignore Dangerous (Auto Target)", Tooltip = "Ignore Dangerous (Auto Target)", Default = true, Save = "ignoreDangerous",
+    Callback = function(v) mg.ignoreDangerous = v end
+})
+
+local ConfigName = "default"
+
+Tabs.Settings:Input({
+    Text = "Config Name", Tooltip = "Config Name",
+    Placeholder = "Enter config name...",
+    Callback = function(text)
+        ConfigName = text
+    end
+})
+
+Tabs.Settings:Button({
+    Text = "Save Config", Tooltip = "Saves your current settings",
+    Callback = function()
+        local name = ConfigName
+        if name == "" then name = "default" end
+        local values = win:GetValues()
+        if writefile then
+            if not isfolder("rawr3_save") then makefolder("rawr3_save") end
+            writefile("rawr3_save/" .. name .. ".json", game:GetService("HttpService"):JSONEncode(values))
+            win:Notify({ Title = "Saved config: " .. name, Icon = "check" })
+        else
+            win:Notify({ Title = "Executor doesn't support writefile", Icon = "alert-circle" })
+        end
+    end
+})
+
+Tabs.Settings:Button({
+    Text = "Load Config", Tooltip = "Loads your saved settings",
+    Callback = function()
+        local name = ConfigName
+        if name == "" then name = "default" end
+        local path = "rawr3_save/" .. name .. ".json"
+        if isfile and isfile(path) then
+            local data = readfile(path)
+            local success, values = pcall(function() return game:GetService("HttpService"):JSONDecode(data) end)
+            if success and type(values) == "table" then
+                win:SetValues(values)
+                win:Notify({ Title = "Loaded config: " .. name, Icon = "check" })
+            else
+                win:Notify({ Title = "Failed to parse config", Icon = "alert-circle" })
             end
-        end
-        task.wait(0.01)
-    end
-end)
-
-task.spawn(function()
-    while true do
-        if Options.PotatoAuto and Options.PotatoAuto.Value then
-            local hp = workspace:FindFirstChild("HotPotato")
-            if hp then
-                local holder = hp:FindFirstChild("CurrentHolder") or hp:FindFirstChild("Player")
-                local canThrow = hp:FindFirstChild("CanBeThrown")
-                
-                if holder and holder.Value == LocalPlayer and (not canThrow or canThrow.Value == true) then
-                    local potentialVictims = {}
-                    for _, p in pairs(Players:GetPlayers()) do
-                        if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
-                            local isSafe = true
-                            if Options.PotatoSafe.Value then
-                                local char = workspace:FindFirstChild(p.Name)
-                                if char and char:FindFirstChild("Cards") and char.Cards:FindFirstChild("Vengeance") then isSafe = false end
-                            end
-                            if Options.PotatoFriend.Value and LocalPlayer:IsFriendsWith(p.UserId) then isSafe = false end
-                            if isSafe then table.insert(potentialVictims, p) end
-                        end
-                    end
-                    
-                    if #potentialVictims > 0 then
-                        local victim = potentialVictims[math.random(1, #potentialVictims)]
-                        local throwRemote = ReplicatedStorage.Remote:FindFirstChild("ThrowBombToPlayer")
-                        if throwRemote then
-                            throwRemote:FireServer(victim)
-                        end
-                        if victim.Character and victim.Character:FindFirstChild("HumanoidRootPart") then
-                            firetouchinterest(LocalPlayer.Character.PrimaryPart, victim.Character.PrimaryPart, 0)
-                            firetouchinterest(LocalPlayer.Character.PrimaryPart, victim.Character.PrimaryPart, 1)
-                        end
-                    end
-                end
-            end
-        end
-        task.wait(0.1)
-    end
-end)
-
-task.spawn(function()
-    while true do
-        if Options.SawAuto and Options.SawAuto.Value then
-            local saw = workspace:FindFirstChild("Saw")
-            if saw and saw.isActive.Value and (saw.Player1.Value == LocalPlayer or saw.Player2.Value == LocalPlayer) then
-                if not LocalPlayer:FindFirstChild("ACCooldown") then
-                    local delay = math.random(Options.SawDelayMin.Value * 100, Options.SawDelayMax.Value * 100) / 100
-                    task.wait(delay)
-                    if Options.SawAuto.Value and saw.isActive.Value then
-                        ReplicatedStorage.Remote.SawEvent:FireServer(false)
-                    end
-                end
-            end
-        end
-        task.wait(0.01)
-    end
-end)
-
-task.spawn(function()
-    while true do
-        if Options.DuelAssist and Options.DuelAssist.Value then
-            local duel = workspace:FindFirstChild("Duel")
-            if duel and duel.Active.Value and (duel.Player1.Value == LocalPlayer or duel.Player2.Value == LocalPlayer) then
-                local target = (duel.Player1.Value == LocalPlayer) and duel.Player2.Value or duel.Player1.Value
-                if target then
-                    local delay = math.random(Options.DuelDelayMin.Value * 100, Options.DuelDelayMax.Value * 100) / 100
-                    task.wait(delay)
-                    if Options.DuelAssist.Value and duel.Active.Value then
-                        ReplicatedStorage.Remote.PickPlayerRevolver:FireServer(target)
-                    end
-                end
-            end
-        end
-        task.wait(0.01)
-    end
-end)
-
-task.spawn(function()
-    while true do
-        if Options.FireAuto and Options.FireAuto.Value then
-            local fb = workspace:FindFirstChild("FireBreath")
-            if fb and fb.PlayerChosen.Value == LocalPlayer then
-                local delay = math.random(Options.FireDelayMin.Value * 100, Options.FireDelayMax.Value * 100) / 100
-                task.wait(delay)
-                if Options.FireAuto.Value then
-                    ReplicatedStorage.Remote.PutOutFire:FireServer()
-                end
-            end
-        end
-        task.wait(0.01)
-    end
-end)
-
-local function UpdateIconESP(obj, state)
-    local visionGui = obj:FindFirstChild("VisionCards", true)
-    local hrp = obj:FindFirstChild("HumanoidRootPart")
-    if hrp and visionGui then
-        visionGui.Enabled = state
-        visionGui.Adornee = state and hrp or nil
-    end
-end
-
-local function UpdateTextESP(obj, state)
-    local name = obj.Name
-    local hrp = obj:FindFirstChild("HumanoidRootPart")
-    local hum = obj:FindFirstChild("Humanoid")
-    if not state or (hum and hum.Health <= 0) then
-        if DrawingEntities[name] then DrawingEntities[name].Visible = false end
-        return
-    end
-    if hrp then
-        if not DrawingEntities[name] then
-            local t = Drawing.new("Text")
-            t.Size = 18; t.Outline = true; t.Center = true
-            DrawingEntities[name] = t
-        end
-        local t = DrawingEntities[name]
-        local vector, onScreen = Camera:WorldToViewportPoint(hrp.Position + Vector3.new(0, 4, 0))
-        if onScreen then
-            local cardList = {}
-            local hasChained = false
-            local cardsFolder = obj:FindFirstChild("Cards")
-            if cardsFolder then
-                for _, c in pairs(cardsFolder:GetChildren()) do 
-                    table.insert(cardList, c.Name)
-                    if string.find(c.Name, "Chained") then hasChained = true end
-                end
-                t.Text = #cardList > 0 and table.concat(cardList, "\n") or "No Cards"
-            end
-            t.Position = Vector2.new(vector.X, vector.Y)
-            t.Color = hasChained and Options.ChainedColor.Value or Options.NormalColor.Value
-            t.Visible = true
-        else t.Visible = false end
-    end
-end
-
-RunService.Heartbeat:Connect(function()
-    for _, obj in pairs(workspace:GetChildren()) do
-        if obj:FindFirstChild("Humanoid") and obj ~= LocalPlayer.Character then
-            UpdateIconESP(obj, Options.IconESP.Value)
-            UpdateTextESP(obj, Options.TextESP.Value)
+        else
+            win:Notify({ Title = "Config not found: " .. name, Icon = "alert-circle" })
         end
     end
+})
 
-    if Options.AutoQTE.Value then
-        local qt = workspace:FindFirstChild("QuickTime")
-        if qt and qt.PlayerChosen.Value == LocalPlayer and qt.TimeRemaining.Value > 0 then
-            ReplicatedStorage.Remote.QuickTimeReact:FireServer()
-        end
+Tabs.Settings:Title("Script")
+
+Tabs.Settings:Button({
+    Text = "Unload Script", Tooltip = "Unload Script",
+    Callback = function()
+        if FullbrightConn then FullbrightConn:Disconnect() end
+        clearAllESP()
+        win:Destroy()
     end
-end)
+})
 
-SaveManager:SetLibrary(Fluent)
-InterfaceManager:SetLibrary(Fluent)
-SaveManager:IgnoreThemeSettings()
-InterfaceManager:BuildInterfaceSection(Tabs.Settings)
-SaveManager:BuildConfigSection(Tabs.Settings)
-Window:SelectTab(1)
-SaveManager:LoadAutoloadConfig()
+win:Notify({
+    Title = "Death in the Box Loaded",
+    Icon = "check"
+})
+
+Tabs.Credits:Title("Credits")
+Tabs.Credits:Button({
+    Text = "Join Discord Server", Tooltip = "Join the community!",
+    Callback = function()
+        setclipboard("discord.gg/FN8Y3yeXhf")
+        win:Notify({ Title = "Copied to clipboard!", Icon = "check" })
+    end
+})
+Tabs.Credits:Button({
+    Text = "Script Creator", Tooltip = "@z3bd in discord",
+    Callback = function()
+        setclipboard("z3bd")
+        win:Notify({ Title = "Copied username to clipboard!", Icon = "check" })
+    end
+})
+
+win:Notify({
+    Title = "Thanks for using baddie!",
+    Content = "Join our Discord for suggestions and bug fixes!",
+    Icon = "message-circle",
+    Duration = 5
+})
